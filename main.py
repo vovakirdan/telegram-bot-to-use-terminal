@@ -37,11 +37,11 @@ ssh_clients = {}
 REMOTE_HOST = os.getenv('REMOTE_HOST')       # Replace with your remote host address
 REMOTE_PORT = 22                       # SSH port, usually 22
 REMOTE_USERNAME = os.getenv('REMOTE_USERNAME')    # Replace with the username on the remote host
-SSH_PRIVATE_KEY_PATH = '/home/slon/.ssh/id_dsa.pub'  # Path to your SSH private key file on the bot server
+SSH_PRIVATE_KEY_PATH = os.getenv('SSH_PRIVATE_KEY_PATH')  # Path to your SSH private key file on the bot server
 
 # Replace with your own username and password for bot authentication
-VALID_USERNAME = 'admin'
-VALID_PASSWORD = 'admin'
+VALID_USERNAME = os.getenv('VALID_USERNAME')
+VALID_PASSWORD = os.getenv('VALID_PASSWORD')
 
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 
