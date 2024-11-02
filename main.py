@@ -68,7 +68,7 @@ async def password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                 hostname=REMOTE_HOST,
                 port=REMOTE_PORT,
                 username=REMOTE_USERNAME,
-                key_filename=SSH_PRIVATE_KEY_PATH
+                allow_agent=True
             )
             ssh_clients[chat_id] = ssh_client
             console_output[chat_id] = deque(maxlen=1000)  # Initialize console output for this user
