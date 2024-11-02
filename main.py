@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 load_dotenv()
 from collections import deque
 
+import asyncio
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -14,7 +15,11 @@ from telegram.ext import (
     ConversationHandler,
 )
 
-import paramiko  # For SSH connections
+import asyncssh  # For asynchronous SSH connections
+
+if not os.path.isfile(os.getenv('SSH_PRIVATE_KEY_PATH')):
+    raise FileNotFoundError(f"SSH private key file not found at {os.getenv('SSH_PRIVATE_KEY_PATH')}")
+key = asyncssh.read_private_key(os.getenv('SSH_PRIVATE_KEY_PATH'))
 
 # Enable logging
 logging.basicConfig(
@@ -30,12 +35,12 @@ USERNAME, PASSWORD = range(2)
 # This will store the last N lines of console output per user
 console_output = {}
 
-# A dictionary to keep track of SSH clients per user (by chat_id)
-ssh_clients = {}
+# A dictionary to keep track of SSH connections per user (by chat_id)
+ssh_connections = {}
 
 # Remote host details
 REMOTE_HOST = os.getenv('REMOTE_HOST')       # Replace with your remote host address
-REMOTE_PORT = 22                       # SSH port, usually 22
+REMOTE_PORT = 22                             # SSH port, usually 22
 REMOTE_USERNAME = os.getenv('REMOTE_USERNAME')    # Replace with the username on the remote host
 SSH_PRIVATE_KEY_PATH = os.getenv('SSH_PRIVATE_KEY_PATH')  # Path to your SSH private key file on the bot server
 
@@ -61,16 +66,16 @@ async def password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     if username == VALID_USERNAME and password == VALID_PASSWORD:
         # Establish SSH connection using pre-configured key
-        ssh_client = paramiko.SSHClient()
-        ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         try:
-            ssh_client.connect(
-                hostname=REMOTE_HOST,
+            ssh_conn = await asyncssh.connect(
+                host=REMOTE_HOST,
                 port=REMOTE_PORT,
                 username=REMOTE_USERNAME,
-                allow_agent=True
+                client_keys=[SSH_PRIVATE_KEY_PATH],
+                passphrase=os.getenv('PASSPHRASE'),
+                known_hosts=None  # Automatically accept unknown hosts
             )
-            ssh_clients[chat_id] = ssh_client
+            ssh_connections[chat_id] = ssh_conn
             console_output[chat_id] = deque(maxlen=1000)  # Initialize console output for this user
             await update.message.reply_text('Authentication successful. SSH connection established.')
         except Exception as e:
@@ -88,18 +93,15 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def execute_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    if chat_id not in ssh_clients:
+    if chat_id not in ssh_connections:
         await update.message.reply_text('Please authenticate first using /start.')
         return
 
     command = update.message.text
 
-    ssh_client = ssh_clients[chat_id]
+    ssh_conn = ssh_connections[chat_id]
     try:
-        stdin, stdout, stderr = ssh_client.exec_command(command)
-        output = stdout.read().decode()
-        error = stderr.read().decode()
-        result = output + error
+        result = await run_ssh_command(ssh_conn, command)
     except Exception as e:
         result = f'Error executing command: {e}'
 
@@ -107,9 +109,16 @@ async def execute_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for line in result.splitlines():
         console_output[chat_id].append(line)
 
+async def run_ssh_command(ssh_conn, command):
+    async with ssh_conn.create_process(command) as process:
+        stdout, stderr = await process.communicate()
+        output = stdout.decode()
+        error = stderr.decode()
+        return output + error
+
 async def readline(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    if chat_id not in ssh_clients:
+    if chat_id not in ssh_connections:
         await update.message.reply_text('Please authenticate first using /start.')
         return
 
@@ -130,8 +139,19 @@ async def readline(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text('No output available.')
 
+async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    if chat_id in ssh_connections:
+        ssh_conn = ssh_connections[chat_id]
+        ssh_conn.close()
+        await ssh_conn.wait_closed()
+        del ssh_connections[chat_id]
+        del console_output[chat_id]
+        await update.message.reply_text('Logged out successfully.')
+    else:
+        await update.message.reply_text('You are not logged in.')
+
 def main():
-    # Replace 'YOUR_BOT_TOKEN' with your bot's token
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
     # Conversation handler for authentication
@@ -146,6 +166,7 @@ def main():
 
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler('rl', readline))
+    application.add_handler(CommandHandler('logout', logout))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, execute_command))
 
     application.run_polling()
